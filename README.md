@@ -19,9 +19,31 @@ CUDA Rasterizer
     
 I made a toon shader with outline drawing.
 
-![result](pic/toon_actual.png)
+In my toon shader function, I requested one more parameter: float layers. 
+
+This parameter is used to define how many segments the toon shader will have. 
+
+When passing to the toon shader, the color space is continuous from 0 to 1, then it will be divided into several segments. 
+
+For example, if we have 5 segments, then colors from 0 to 0.2 falls to the first segment, and colors from 0.2 to 0.4 falls to the second segment. 
+
+This step is simple, next is to draw the lines. 
+
+If you look at "borderland", which is a successful toon shader game, you will find out that there're 2 kinds of lines: 
+
+the lines that surrounds the object, called "outer line". 
+
+and the lines that appears within the object(usually used to illustrate important geomitry, like nose and eyes and lips). I call them "inner line"
+
+The technique to draw outer lines is simple. Insdead of checking dot(pixel.normal,camera.foward) changes from positive to negative, we can simply check the depth buffer. If the depth differs a lot, larger than the threshold, we can assume that this is a boundary. 
+
+And about inner lines. Since inner lines present the sharp edge of geomitry, or the boundaries between 2 objects(eg. eyeballs and eyelids)， we should check the normal differents. If the normal differs a lot at a point, larger than the normal's threshold, we can say that this is a inner line boundary.
 
 ![result](pic/toon_debug.png)
+
+This picture presents the debugging mode for outlines drawing. The red line is the outer line, and the green line is the inner line. You can see that inner lines appears as assisting lines that helps to draw the geomtries. 
+
+![result](pic/toon_actual.png)
     
 ### 2. Sketch Shader
 
@@ -29,7 +51,7 @@ I made a toon shader with outline drawing.
 
 In fact, this shader is inspired by one of the many bugs I have. 
 
-![result](pic/worng_texture.png)
+![result](pic/wrong_texture.png)
 
 Then, it reminds me of a kind of comic books that's once popular in China during the 1960s
 
@@ -52,3 +74,6 @@ The law of pen drawing is:
 
 3- lines should follow the surface's geomtry. 
 
+![result](pic/pen_draw.png)
+
+I think this could illustrate that well. 
