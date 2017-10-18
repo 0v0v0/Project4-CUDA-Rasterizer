@@ -18,6 +18,12 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "device_functions.h"
+//#include <sm_32_atomic_functions.h>
+//#include <device_atomic_functions.h>
+//#include "sm_32_atomic_functions.hpp"
+//#include <sm_20_atomic_functions.h>
+
 namespace {
 
 	typedef unsigned short VertexIndex;
@@ -41,12 +47,13 @@ namespace {
 		// The attributes listed below might be useful, 
 		// but always feel free to modify on your own
 
-		 glm::vec3 eyePos;	// eye space position used for shading
-		 glm::vec3 eyeNor;	// eye space normal used for shading, cuz normal will go wrong after perspective transformation
-		// glm::vec3 col;
-		 glm::vec2 texcoord0;
-		 TextureData* dev_diffuseTex = NULL;
-		// int texWidth, texHeight;
+		glm::vec3 eyePos;	// eye space position used for shading
+		glm::vec3 eyeNor;	// eye space normal used for shading, cuz normal will go wrong after perspective transformation
+
+		glm::vec3 color;
+		glm::vec2 texcoord0;
+		TextureData* dev_diffuseTex = NULL;
+		int texWidth, texHeight;
 		// ...
 	};
 
@@ -62,11 +69,14 @@ namespace {
 		// The attributes listed below might be useful, 
 		// but always feel free to modify on your own
 
-		// glm::vec3 eyePos;	// eye space position used for shading
-		// glm::vec3 eyeNor;
-		// VertexAttributeTexcoord texcoord0;
-		// TextureData* dev_diffuseTex;
+		glm::vec3 eyePos;	// eye space position used for shading
+		glm::vec3 eyeNor;
+		VertexAttributeTexcoord texcoord0;
+
 		// ...
+		//TextureData* dev_diffuseTex;
+		//int texWidth, texHeight;
+		
 	};
 
 	struct PrimitiveDevBufPointers {
@@ -137,17 +147,333 @@ void sendImageToPBO(uchar4 *pbo, int w, int h, glm::vec3 *image) {
 * Writes fragment colors to the framebuffer
 */
 __global__
-void render(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer) {
+void render(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer, int* depth) {
     int x = (blockIdx.x * blockDim.x) + threadIdx.x;
     int y = (blockIdx.y * blockDim.y) + threadIdx.y;
     int index = x + (y * w);
 
     if (x < w && y < h) {
-        framebuffer[index] = fragmentBuffer[index].color;
 
-		// TODO: add your fragment shader code here
-
+		if (depth[index] != INT_MAX)
+		{
+			// TODO: add your fragment shader code here
+			float cosinepower = glm::dot(glm::vec3(0, 0, 1), fragmentBuffer[index].eyeNor) / glm::length(fragmentBuffer[index].eyeNor);
+			framebuffer[index] = fragmentBuffer[index].color*cosinepower;
+		}
+		else
+		{
+			//If point is in void, paint mono color
+			//PINK= 1 0.07 0.5
+			framebuffer[index] = glm::vec3(0.3f,0.3f,0.3f);
+		}	
     }
+}
+
+__global__
+void render2(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer, int* depth) {
+	int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+	int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+	int index = x + (y * w);
+
+	if (x < w && y < h) {
+
+		if (depth[index] != INT_MAX)
+		{
+			// TODO: add your fragment shader code here
+			framebuffer[index]=fragmentBuffer[index].color;
+		}
+		else
+		{
+			//If point is in void, paint mono color
+			//PINK= 1 0.07 0.5
+			framebuffer[index] = glm::vec3(0.3f, 0.3f, 0.3f);
+		}
+	}
+}
+
+
+/**
+* Writes fragment colors to the framebuffer
+*/
+__global__
+void toon_shader(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer, int* depth, float layers) {
+	int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+	int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+	int index = x + (y * w);
+
+	if (x < w && y < h) {
+
+		if (depth[index] != INT_MAX)
+		{
+			// TODO: add your fragment shader code here
+			
+			/*
+			************
+			Toon Shader: 
+			************
+			1. divide color space into 5 segments, and cartoonrize the color
+			2. draw outline when: 
+				Red wires: depth drops exceeds the threshold (Replace the normal checking, so we could control the wire width) 
+				Green wires: normal differs exceeds the threshold
+			*/
+
+			//make the color spartial
+			glm::vec3 color = fragmentBuffer[index].color;
+			int r = color.x * layers;
+			int g = color.y * layers;
+			int b = color.z * layers;
+			r /= 2;
+			b /= 2;
+			g /= 2;
+			framebuffer[index] = glm::vec3(r,g,b)*(1.0f/layers);
+
+			//draw outline
+
+			//threshold for depth, bigger=stronger wires
+			float threshold = 100;
+
+			//threshold for normal, bigger=stronger wires
+			float norm_threshold = 0.8f;
+
+			//4 directions to check
+			int up = index = x + ((y - 1) * w);
+			int down = index = x + ((y + 1) * w);
+			int left = index = x - 1 + (y * w);
+			int right = index = x + 1 + (y * w);
+
+			//differs in depth
+			int dif_up, dif_down, dif_left, dif_right;
+			//differs in normal
+			float norm_left, norm_right, norm_up, norm_down;
+
+			//Init
+			dif_up = dif_down = dif_left = dif_right = 0;
+			norm_left = norm_right = norm_up = norm_down = 0;
+
+			//Compute differs
+			if (up > 0 && up < w*h)
+			{
+				dif_up = abs(depth[up] - depth[index]);
+				norm_up = glm::dot(fragmentBuffer[up].eyeNor, fragmentBuffer[index].eyeNor);
+			}
+			if (down > 0 && down < w*h)
+			{
+				dif_down = abs(depth[down] - depth[index]);
+				norm_down = glm::dot(fragmentBuffer[down].eyeNor, fragmentBuffer[index].eyeNor);
+			}
+			if (left > 0 && left < w*h)
+			{
+				dif_left = abs(depth[left] - depth[index]);
+				norm_left = glm::dot(fragmentBuffer[left].eyeNor, fragmentBuffer[index].eyeNor);
+			}
+			if (right > 0 && right < w*h)
+			{
+				dif_right = abs(depth[right] - depth[index]);
+				norm_right = glm::dot(fragmentBuffer[right].eyeNor, fragmentBuffer[index].eyeNor);
+			}
+
+			//Draw wires
+
+			//Uncomment this For debugging 
+			/*
+			if (dif_up > threshold || dif_down > threshold || dif_left > threshold || dif_right > threshold)
+			{
+				framebuffer[index] = glm::vec3(1, 0, 0); //red wires
+			}
+			else if ( norm_left < norm_threshold || norm_right < norm_threshold || norm_up < norm_threshold || norm_down < norm_threshold)
+			{				
+				framebuffer[index] = glm::vec3(0, 1, 0); //green wires				
+			}
+			*/
+
+			//Uncomment this For picture		
+			if (norm_left < norm_threshold || norm_right < norm_threshold || norm_up < norm_threshold || norm_down < norm_threshold)
+			{
+				framebuffer[index] *= glm::vec3(0.3f); //gray wires				
+			}
+			if (dif_up > threshold || dif_down > threshold || dif_left > threshold || dif_right > threshold)
+			{
+				framebuffer[index] *= glm::vec3(0); //black wires
+			}	
+			
+		}
+		else
+		{
+			//If point is in void, paint mono color
+			//PINK= 1 0.07 0.5
+			framebuffer[index] = glm::vec3(1);
+		}
+	}
+}
+
+__global__
+void toon_shader2(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer, int* depth, float layers, float threshold) {
+	int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+	int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+	int index = x + (y * w);
+
+	if (x < w && y < h) {
+
+		if (depth[index] != INT_MAX)
+		{
+			//make the color spartial
+			glm::vec3 color = fragmentBuffer[index].color;
+
+			if (color.x < threshold)
+			{				
+				//density=x^2
+				
+				float fr = (1-color.x) * layers;
+				float fg = (1-color.y) * layers;
+				float fb = (1-color.z) * layers;			
+
+				int r = fr;
+				int g = fg;
+				int b = fb;
+
+				r %= 2;
+				b %= 2;
+				g %= 2;
+
+				framebuffer[index] = glm::vec3(r*color.x, g*color.y, b*color.z);
+			}
+			else
+			{
+				framebuffer[index] = glm::vec3(1);
+			}
+		}
+		else
+		{
+			//If point is in void, paint mono color
+			//PINK= 1 0.07 0.5
+			framebuffer[index] = glm::vec3(1);
+		}
+	}
+}
+
+
+//Sketch Shader
+__global__
+void sketch_shader(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer, int* depth, float threshold) {
+	int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+	int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+	int index = x + (y * w);
+
+	if (x < w && y < h) {
+
+		if (depth[index] != INT_MAX)
+		{
+
+			//4 directions to check
+			int up = index = x + ((y - 1) * w);
+			int down = index = x + ((y + 1) * w);
+			int left = index = x - 1 + (y * w);
+			int right = index = x + 1 + (y * w);
+
+			//differs in depth
+			float dif_up, dif_down, dif_left, dif_right;
+			//differs in normal
+			float norm_left, norm_right, norm_up, norm_down;
+
+			//Init
+			dif_up = dif_down = dif_left = dif_right = 0;
+			norm_left = norm_right = norm_up = norm_down = 0;
+
+			//Compute differs
+			if (up > 0 && up < w*h)
+			{
+				dif_up = glm::length(framebuffer[up] - framebuffer[index]);
+			}
+			if (down > 0 && down < w*h)
+			{
+				dif_down = glm::length(framebuffer[down] - framebuffer[index]);			
+			}
+			if (left > 0 && left < w*h)
+			{
+				dif_left = glm::length(framebuffer[left] - framebuffer[index]);				
+			}
+			if (right > 0 && right < w*h)
+			{
+				dif_right = glm::length(framebuffer[right] - framebuffer[index]);			
+			}	
+
+			if (dif_up > threshold || dif_down > threshold || dif_left > threshold || dif_right > threshold)
+			{
+				framebuffer[index] = glm::vec3(0);
+			}
+			else
+			{
+				framebuffer[index] = glm::vec3(1);
+			}
+
+		}
+		else
+		{
+			//If point is in void, paint mono color
+			//PINK= 1 0.07 0.5
+			//framebuffer[index] = glm::vec3(1);
+		}
+	}
+}
+
+//Sketch Shader
+__global__
+void sketch_shader2(int w, int h, Fragment *fragmentBuffer, glm::vec3 *framebuffer, int* depth, float threshold_g) {
+	int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+	int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+	int index = x + (y * w);
+
+	if (x < w && y < h) {
+
+		if (depth[index] != INT_MAX)
+		{
+
+			//4 directions to check
+			int up = index = x + ((y - 1) * w);
+			int down = index = x + ((y + 1) * w);
+			int left = index = x - 1 + (y * w);
+			int right = index = x + 1 + (y * w);
+
+			//differs in depth
+			float dif_up, dif_down, dif_left, dif_right;
+			//differs in normal
+			float norm_left, norm_right, norm_up, norm_down;
+
+			//Init
+			dif_up = dif_down = dif_left = dif_right = 0;
+			norm_left = norm_right = norm_up = norm_down = 0;
+
+			//Compute differs
+			if (up > 0 && up < w*h)
+			{
+				dif_up = framebuffer[up].x - framebuffer[index].x;
+			}
+			if (down > 0 && down < w*h)
+			{
+				dif_down = framebuffer[down].x - framebuffer[index].x;
+			}
+			if (left > 0 && left < w*h)
+			{
+				dif_left = framebuffer[left].x - framebuffer[index].x;
+			}
+			if (right > 0 && right < w*h)
+			{
+				dif_right = framebuffer[right].x - framebuffer[index].x;
+			}
+
+			float threshold =threshold_g* framebuffer[index].x;
+
+			if (dif_up > threshold || dif_down > threshold || dif_left > threshold || dif_right > threshold)
+			{
+				framebuffer[index] = glm::vec3(0);
+			}
+			else
+			{
+				framebuffer[index] = glm::vec3(1);
+			}
+
+		}
+	}
 }
 
 /**
@@ -641,7 +967,30 @@ void _vertexTransformAndAssembly(
 
 		// TODO: Apply vertex assembly here
 		// Assemble all attribute arraies into the primitive array
-		
+
+		glm::vec3 tmp;
+
+		tmp = primitive.dev_position[vid];
+
+		glm::vec4 aaa(tmp.x, tmp.y, tmp.z, 1);
+
+		glm::vec4 point = MVP*aaa;
+
+		point /= point.w;
+		point.x += 1;
+		point.y = 1-point.y;
+
+		point.x *= width/2;
+		point.y *= height/2;
+		point.z *= 10000;
+		primitive.dev_verticesOut[vid].pos = point; //Position
+
+		primitive.dev_verticesOut[vid].dev_diffuseTex = primitive.dev_diffuseTex; //Copy texture pointer
+		primitive.dev_verticesOut[vid].texHeight = primitive.diffuseTexHeight;
+		primitive.dev_verticesOut[vid].texWidth = primitive.diffuseTexWidth;	
+		primitive.dev_verticesOut[vid].texcoord0 = primitive.dev_texcoord0[vid];
+		primitive.dev_verticesOut[vid].eyeNor = MV_normal*primitive.dev_normal[vid];
+		//(primitive.dev_verticesOut + vid)->color=primitive.
 	}
 }
 
@@ -660,19 +1009,351 @@ void _primitiveAssembly(int numIndices, int curPrimitiveBeginId, Primitive* dev_
 		// TODO: uncomment the following code for a start
 		// This is primitive assembly for triangles
 
-		//int pid;	// id for cur primitives vector
-		//if (primitive.primitiveMode == TINYGLTF_MODE_TRIANGLES) {
-		//	pid = iid / (int)primitive.primitiveType;
-		//	dev_primitives[pid + curPrimitiveBeginId].v[iid % (int)primitive.primitiveType]
-		//		= primitive.dev_verticesOut[primitive.dev_indices[iid]];
-		//}
+		int pid;	// id for cur primitives vector
+		if (primitive.primitiveMode == TINYGLTF_MODE_TRIANGLES) {
+			pid = iid / (int)primitive.primitiveType;
 
+			int a = pid + curPrimitiveBeginId;
+			int b = iid % (int)primitive.primitiveType;
+			int c = primitive.dev_indices[iid];
 
+			dev_primitives[a].v[b]= primitive.dev_verticesOut[c];
+			//COPY texture data
+
+			
+			dev_primitives[a].v[b].dev_diffuseTex
+				= primitive.dev_verticesOut[c].dev_diffuseTex;
+			dev_primitives[a].v[b].texcoord0= primitive.dev_verticesOut[c].texcoord0;
+			dev_primitives[a].v[b].texHeight
+				= primitive.dev_verticesOut[c].texHeight;
+			dev_primitives[a].v[b].texWidth
+				= primitive.dev_verticesOut[c].texWidth;
+			dev_primitives[a].v[b].eyeNor
+				= primitive.dev_verticesOut[c].eyeNor;
+				
+
+		}
 		// TODO: other primitive types (point, line)
 	}
 	
 }
 
+#define MIN(a, b) ((a < b) ? a : b)
+#define MAX(a, b) ((a > b) ? a : b) 
+
+/*
+//Raster via triangles
+__global__ void raster_naive(
+	int numPrim, 
+	Primitive* dev_primitives, 
+	
+	int* dev_depth, 
+	Fragment* fragments , 
+	int width, int height)
+{
+	// index id
+	int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
+
+	int i, j;
+
+	if (idx < numPrim)
+	{
+		glm::vec4 a = (dev_primitives + idx)->v[0].pos;
+		glm::vec4 b = (dev_primitives + idx)->v[1].pos;
+		glm::vec4 c = (dev_primitives + idx)->v[2].pos;		
+
+		//get bounding box
+		float xmax = MAX(MAX(a.x, b.x), c.x);
+		float xmin = MIN(MIN(a.x, b.x), c.x);
+
+		float ymax = MAX(MAX(a.y, b.y), c.y);
+		float ymin = MIN(MIN(a.y, b.y), c.y);
+
+		//compute only once per-triangle
+		glm::vec3 ab = glm::vec3(a) - glm::vec3(b);
+		glm::vec3 bc = glm::vec3(b) - glm::vec3(c);
+		glm::vec3 ca = glm::vec3(c) - glm::vec3(a);
+		ab.z = bc.z = ca.z = FLT_MIN;	//I think this should be 0, for safety, I give it a smallest number
+		float abc = glm::length(glm::cross(ab, -ca));	//area of the triangle
+
+
+		if (abc > 0)
+		{		
+			//Loop around pixels within bounding box
+			for (j = ymin; j < ymax; j++)
+			{
+				for (i = xmin; i < xmax; i++)
+				{
+					int pixel = j*width + i;
+
+					if (pixel < width*height)
+					{
+						
+						//Get Help From: 
+						//http://blackpawn.com/texts/pointinpoly/
+						//2017-10-16 All right, I see these functions are included in header files. :<
+
+						// Compute vectors        
+						glm::vec3 v0 = ca;
+						glm::vec3 v1 = -ab;
+						glm::vec3 v2 = glm::vec3(i, j, FLT_MIN) - glm::vec3(a);
+
+						// Compute dot products
+						float dot00 = glm::dot(v0, v0);
+						float dot01 = glm::dot(v0, v1);
+						float dot02 = glm::dot(v0, v2);
+						float dot11 = glm::dot(v1, v1);
+						float dot12 = glm::dot(v1, v2);
+
+						// Compute barycentric coordinates
+						float invDenom = 1 / (dot00 * dot11 - dot01 * dot01);
+						float u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+						float v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+						float xc = u;
+						float xb = v;
+						float xa = 1 - u - v;
+
+						float pixel_z = a.z*xa + b.z*xb + c.z*xc;	//z-depth
+
+						//Anyway, we need barycentric interpolation in this branch, 
+						//so use areas to determine if the point is within the triangle.
+
+						if((u >= 0) && (v >= 0) && (u + v < 1))
+						{
+							if (dev_depth[pixel] > pixel_z)	//If the depth is closer to camera
+							{
+								glm::vec2 tex_cord = (dev_primitives + idx)->v[0].texcoord0 *xa +
+									(dev_primitives + idx)->v[1].texcoord0 *xb +
+									(dev_primitives + idx)->v[2].texcoord0 *xc;	//texture_coordinate
+
+								tex_cord = glm::normalize(tex_cord);
+
+								
+								if((dev_primitives + idx)->v[0].dev_diffuseTex !=NULL) //If has texture, paint
+								{
+									int theight = (dev_primitives + idx)->v[0].texHeight;
+									int twidth = (dev_primitives + idx)->v[0].texWidth;
+
+									float tx = tex_cord.x*twidth;
+									float ty = tex_cord.y*theight;
+									int tpos;
+									tpos = (ty*twidth + tx);
+									tpos *= 3;
+
+									fragments[pixel].color = glm::vec3(
+										((dev_primitives + idx)->v[0].dev_diffuseTex[tpos]),
+										((dev_primitives + idx)->v[0].dev_diffuseTex[tpos + 1]),
+										((dev_primitives + idx)->v[0].dev_diffuseTex[tpos + 2])
+									);
+								}
+								else //No texture, paint white
+								{
+									fragments[pixel].color = glm::vec3(1, 1, 1);	//paint white for checking
+								}
+
+								//int atomicMin(int* address, int val);
+
+								atomicMin(dev_depth+pixel, pixel_z);
+								
+								//dev_depth[pixel] = pixel_z; //replace the depth-buffer
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+*/
+
+
+//Raster via triangles
+__global__ void raster_naive2(
+	int numPrim,
+	Primitive* dev_primitives,
+
+	int* dev_depth,
+	Fragment* fragments,
+	int width, int height)
+{
+	// index id
+	int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
+
+	int i, j;
+
+	if (idx < numPrim)
+	{
+		glm::vec4 a = (dev_primitives + idx)->v[0].pos;
+		glm::vec4 b = (dev_primitives + idx)->v[1].pos;
+		glm::vec4 c = (dev_primitives + idx)->v[2].pos;
+
+		//get bounding box
+		float xmax = MAX(MAX(a.x, b.x), c.x);
+		float xmin = MIN(MIN(a.x, b.x), c.x);
+		float ymax = MAX(MAX(a.y, b.y), c.y);
+		float ymin = MIN(MIN(a.y, b.y), c.y);
+
+		//compute only once per-triangle		
+		glm::vec3 tri[3];
+		tri[0] = glm::vec3(a);
+		tri[1] = glm::vec3(b);
+		tri[2] = glm::vec3(c);
+
+		float area = calculateSignedArea(tri);	//area of the triangle
+
+		if (area > 0)
+		{
+			//Loop around pixels within bounding box
+			for (j = ymin; j < ymax; j++)
+			{
+				for (i = xmin; i < xmax; i++)
+				{
+					int pixel = j*width + i;
+
+					if (pixel < width*height)
+					{
+						glm::vec2 point(i, j);
+
+						glm::vec3 bary = calculateBarycentricCoordinate(tri, point);
+
+						int pixel_z = -getZAtCoordinate(bary, tri);	//z-depth
+
+						//Anyway, we need barycentric interpolation in this branch, 
+						//so use areas to determine if the point is within the triangle.
+						if ((bary.x >= 0) && (bary.y >= 0) && (bary.z >=0))
+						{
+							if (atomicMin(dev_depth + pixel, pixel_z) >= pixel_z)	//If the depth is closer to camera
+							{																
+								glm::vec3 nor= (dev_primitives + idx)->v[0].eyeNor *bary.x +
+									(dev_primitives + idx)->v[1].eyeNor *bary.y +
+									(dev_primitives + idx)->v[2].eyeNor *bary.z;
+								fragments[pixel].eyeNor = nor;
+								
+								if ((dev_primitives + idx)->v[0].dev_diffuseTex != NULL) //If has texture, paint
+								{
+									//texture_coordinate
+									glm::vec2 tex_cord; 								
+									tex_cord = dev_primitives[idx].v[0].texcoord0 *bary.x +
+										dev_primitives[idx].v[1].texcoord0 *bary.y +
+										dev_primitives[idx].v[2].texcoord0 *bary.z;
+
+									float theight = (dev_primitives + idx)->v[0].texHeight;
+									float twidth = (dev_primitives + idx)->v[0].texWidth;
+
+									float tx = (tex_cord.x)*twidth;
+									float ty = (tex_cord.y)*theight;
+									int tpos;
+									tpos = ty*twidth + tx;								
+									glm::vec3 color;
+									if ((tpos < twidth*theight) && (tpos>=0))
+									{
+										tpos *= 3;
+										//For 24bit only
+										float color_r = dev_primitives[idx].v[0].dev_diffuseTex[tpos] / 255.0f;
+										float color_g = dev_primitives[idx].v[1].dev_diffuseTex[tpos + 1] / 255.0f;
+										float color_b = dev_primitives[idx].v[2].dev_diffuseTex[tpos + 2] / 255.0f;
+										color = glm::vec3(color_r, color_g, color_b);
+									}
+									fragments[pixel].color = color;								
+								}									
+								else //No texture, paint white
+								{
+									fragments[pixel].color = glm::vec3(1, 1, 1);	//paint white for checking									
+								}							
+							}
+						}
+					}
+				}
+			}
+		}	
+	}
+}
+
+
+//Raster via triangles
+__global__ void raster_naive3(
+	int numPrim,
+	Primitive* dev_primitives,
+
+	int* dev_depth,
+	Fragment* fragments,
+	int width, int height,
+	glm::vec3 obj_color)
+{
+	// index id
+	int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
+
+	int i, j;
+
+	if (idx < numPrim)
+	{
+		glm::vec4 a = (dev_primitives + idx)->v[0].pos;
+		glm::vec4 b = (dev_primitives + idx)->v[1].pos;
+		glm::vec4 c = (dev_primitives + idx)->v[2].pos;
+
+		//get bounding box
+		float xmax = MAX(MAX(a.x, b.x), c.x);
+		float xmin = MIN(MIN(a.x, b.x), c.x);
+		float ymax = MAX(MAX(a.y, b.y), c.y);
+		float ymin = MIN(MIN(a.y, b.y), c.y);
+
+		//compute only once per-triangle		
+		glm::vec3 tri[3];
+		tri[0] = glm::vec3(a);
+		tri[1] = glm::vec3(b);
+		tri[2] = glm::vec3(c);
+
+		float area = calculateSignedArea(tri);	//area of the triangle
+
+		if (area > 0)
+		{
+			//Loop around pixels within bounding box
+			for (j = ymin; j < ymax; j++)
+			{
+				for (i = xmin; i < xmax; i++)
+				{
+					int pixel = j*width + i;
+
+					if (pixel < width*height)
+					{
+						glm::vec2 point(i, j);
+
+						glm::vec3 bary = calculateBarycentricCoordinate(tri, point);
+
+						int pixel_z = -getZAtCoordinate(bary, tri);	//z-depth
+
+																	//Anyway, we need barycentric interpolation in this branch, 
+																	//so use areas to determine if the point is within the triangle.
+						if ((bary.x >= 0) && (bary.y >= 0) && (bary.z >= 0))
+						{
+							if (atomicMin(dev_depth + pixel, pixel_z) >= pixel_z)	//If the depth is closer to camera
+							{
+
+
+
+								glm::vec3 nor = (dev_primitives + idx)->v[0].eyeNor *bary.x +
+									(dev_primitives + idx)->v[1].eyeNor *bary.y +
+									(dev_primitives + idx)->v[2].eyeNor *bary.z;
+
+								fragments[pixel].eyeNor = nor;
+
+								float cosinepower = glm::dot(glm::vec3(0, 0, 1), nor) / glm::length(nor);
+								//paint mono color for checking	
+								fragments[pixel].color = obj_color* cosinepower;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+
+#define toonshader 0
+#define sketchshader 0
+#define sketchshader_good 1
 
 
 /**
@@ -687,13 +1368,17 @@ void rasterize(uchar4 *pbo, const glm::mat4 & MVP, const glm::mat4 & MV, const g
 	// Execute your rasterization pipeline here
 	// (See README for rasterization pipeline outline.)
 
+	int numtris = 0;
+
 	// Vertex Process & primitive assembly
-	{
+	
 		curPrimitiveBeginId = 0;
 		dim3 numThreadsPerBlock(128);
 
 		auto it = mesh2PrimitivesMap.begin();
 		auto itEnd = mesh2PrimitivesMap.end();
+
+		
 
 		for (; it != itEnd; ++it) {
 			auto p = (it->second).begin();	// each primitive
@@ -713,21 +1398,41 @@ void rasterize(uchar4 *pbo, const glm::mat4 & MVP, const glm::mat4 & MV, const g
 				checkCUDAError("Primitive Assembly");
 
 				curPrimitiveBeginId += p->numPrimitives;
-			}
+			}	
 		}
 
 		checkCUDAError("Vertex Processing and Primitive Assembly");
-	}
+	
 	
 	cudaMemset(dev_fragmentBuffer, 0, width * height * sizeof(Fragment));
 	initDepth << <blockCount2d, blockSize2d >> >(width, height, dev_depth);
 	
 	// TODO: rasterize
+	// Copy depthbuffer colors into framebuffer
 
+	dim3 numPrims((totalNumPrimitives + numThreadsPerBlock.x - 1) / numThreadsPerBlock.x);
+   
+	glm::vec3 color(1, 1, 0);
+#if toonshader
+	raster_naive3 << <numPrims, numThreadsPerBlock >> > (totalNumPrimitives, dev_primitives, dev_depth, dev_fragmentBuffer, width, height, color);
+	toon_shader << <blockCount2d, blockSize2d >> >(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth, 10.0f);
 
+#elif sketchshader
+	raster_naive3 << <numPrims, numThreadsPerBlock >> > (totalNumPrimitives, dev_primitives, dev_depth, dev_fragmentBuffer, width, height, color);
+	toon_shader << <blockCount2d, blockSize2d >> >(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth, 40.0f);
+	sketch_shader << <blockCount2d, blockSize2d >> >(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth, 0.15f);
+#elif sketchshader_good
+	color = glm::vec3(1);
+	raster_naive3 << <numPrims, numThreadsPerBlock >> > (totalNumPrimitives, dev_primitives, dev_depth, dev_fragmentBuffer, width, height, color);
+	toon_shader2 << <blockCount2d, blockSize2d >> >(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth, 50.0f, 0.8f);
+	sketch_shader2 << <blockCount2d, blockSize2d >> >(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth, 0.5f);
 
-    // Copy depthbuffer colors into framebuffer
-	render << <blockCount2d, blockSize2d >> >(width, height, dev_fragmentBuffer, dev_framebuffer);
+#else
+	raster_naive2 << <numPrims, numThreadsPerBlock >> > (totalNumPrimitives, dev_primitives, dev_depth, dev_fragmentBuffer, width, height);
+	render2 << <blockCount2d, blockSize2d >> >(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth);
+#endif //textureshader
+	
+
 	checkCUDAError("fragment shader");
     // Copy framebuffer into OpenGL buffer for OpenGL previewing
     sendImageToPBO<<<blockCount2d, blockSize2d>>>(pbo, width, height, dev_framebuffer);
