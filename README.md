@@ -10,13 +10,25 @@ CUDA Rasterizer
 ![result](pic/sketch_fin.gif)
 
 ## HighLight Features
-    ### 1. Toon Shader
-    ![result](pic/toon_actual.gif)
-    ![result](pic/toon_debug.gif)
+
+### 1. Toon Shader
+![result](pic/toon_actual.gif)
+![result](pic/toon_debug.gif)
     
-    I made a toon shader with outline drawing.
+I made a toon shader with outline drawing.
+
+![result](pic/toon_debug.png)
+![result](pic/toon_debug.png)
     
-    ### 2. Sketch Shader
+### 2. Sketch Shader
+
+![result](pic/sketch_a_duck.png)
+
+In fact, this shader is inspired by one of the many bugs I have. 
+
+![result](pic/worng_texture.png)
+
+
     
 
 
