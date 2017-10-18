@@ -12,7 +12,7 @@ CUDA Rasterizer
 
 ## HighLight Features
 
-### 1. Toon Shader
+## 1. Toon Shader
 ![result](pic/toon_actual.gif)
 
 ![result](pic/toon_debug.gif)
@@ -45,7 +45,7 @@ This picture presents the debugging mode for outlines drawing. The red line is t
 
 ![result](pic/toon_actual.png)
     
-### 2. Sketch Shader
+## 2. Sketch Shader
 
 ![result](pic/sketch_a_duck.png)
 
@@ -88,7 +88,9 @@ In toon shader, color discret is done by:
 
 int r = (color.x) * layers;
 
-And we add: 
+But we do: 
+
+int r = (color.x * color.x) * layers;
 
 r % = 2;
 
@@ -105,3 +107,34 @@ I slightly modified the function I used before as naive sketching, now we only d
 ![result](pic/sketch_2.png)
 
 
+#### Minor improvements on sketch shader
+
+After that, I googled some tutorials about pen drawing, and there're 2 more rules(that I can understand) : 
+
+1- Lines shouldn't always appear as loops, they should break at highlight areas. 
+
+2- For rather white areas, don't draw any lines, leave them blank. 
+
+For the first law, we could change the code in toon shader a little bit by: 
+
+int r = color.x * layers;
+
+r % = 2;
+
+out.color = glm::vec3(r * color.x, g * color.y, b * color.z);
+
+We are, in fact, still using color.x * color.x, but this time, the output lines varies in Intensity. 
+
+![result](pic/duck_imp.png)
+
+And in sketch shader, we add a threshold. If the difference in color is smaller than the threshold, we don't think this is a gradient outline. 
+
+As for the second law, we can do this by adding a threshold in the toon shader, if Intensity is larger than the threshold, we output white color in this pixel, and it will be ignored in the sketch shader. 
+
+## Bugs and errors
+
+1. Since I did no optimization, the FPS will drop quickly when moving the camera near. And when it is near enough, the program collapse. Sometimes the graphic driver will stop. 
+![result](pic/1.png)
+
+2. The texture UV is still not right, I'm pretty sure it is not due to pixel correction since there's no way the textures of eyes could appear on the duck's wings! Still no idea why. 
+![result](pic/wrong_texture.png)
