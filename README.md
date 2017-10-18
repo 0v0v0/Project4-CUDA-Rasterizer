@@ -139,12 +139,60 @@ As for the second law, we can do this by adding a threshold in the toon shader, 
 2. The texture UV is still not right, I'm pretty sure it is not due to pixel correction since there's no way the textures of eyes could appear on the duck's wings! Still no idea why. 
 ![result](pic/wrong_texture.png)
 
-## Functions added
+## Functions implemented
 
 ### raster_naive3
 
-//This function does simple naive raster, per triangle. 
-//output color with lambert law, assume the light is on camera. 
-//since the texture is not working, assume the object is mono-color in texture. 
+This function does simple naive raster, per triangle. 
+
+Output color with lambert law, assume the light is on camera. 
+
+Since the texture is not working, assume the object is mono-color in texture. 
+
+Its brother, raster_naive2, can paint texture, but in wrong UV.
+
+
 raster_naive3 << <numPrims, numThreadsPerBlock >> > 
+
 (totalNumPrimitives, dev_primitives, dev_depth, dev_fragmentBuffer, width, height, color);
+
+### toon shader
+
+This function works on the color and depth offered by raster_naive3
+
+Does basic color disctreting, and draw outer lines and inner lines.
+
+If you wish to see the red and green lines for debugging, uncomment some codes marked inside the function.
+
+Notice, if you wish to have 10 segments in color space, input layers as 20. 
+
+toon_shader << <blockCount2d, blockSize2d >> >
+
+(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth, layers);
+
+### sketch_shader
+
+This function works after toon shader (but not required to generate a toon render)
+
+It does basic sketching based on color gradiants. 
+
+threshold defines how sensitive the shader is to color differs. Smaller threshold means more sinsitive. 
+
+sketch_shader << <blockCount2d, blockSize2d >> >(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth, threshold);
+
+### toon_shader2 and sketch_shader2
+
+They are slightly modified version of toon_shader and sketch_shader, combining these 2 functions together, we can get the sketch rendered as is shown above. 
+
+toon_shader2 << <blockCount2d, blockSize2d >> >
+
+(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth, layers, threshold);
+
+threshold controls how large the white area is. The bigger this float, the larger the blank area. 
+
+
+sketch_shader2 << <blockCount2d, blockSize2d >> >
+
+(width, height, dev_fragmentBuffer, dev_framebuffer, dev_depth, threshold_g);
+
+threshold_g controls how likely a line will break. The bigger the threshold_g, the less likely a line will break in brighter area. 
