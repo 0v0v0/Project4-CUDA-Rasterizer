@@ -138,3 +138,13 @@ As for the second law, we can do this by adding a threshold in the toon shader, 
 
 2. The texture UV is still not right, I'm pretty sure it is not due to pixel correction since there's no way the textures of eyes could appear on the duck's wings! Still no idea why. 
 ![result](pic/wrong_texture.png)
+
+## Functions added
+
+### raster_naive3
+
+//This function does simple naive raster, per triangle. 
+//output color with lambert law, assume the light is on camera. 
+//since the texture is not working, assume the object is mono-color in texture. 
+raster_naive3 << <numPrims, numThreadsPerBlock >> > 
+(totalNumPrimitives, dev_primitives, dev_depth, dev_fragmentBuffer, width, height, color);
