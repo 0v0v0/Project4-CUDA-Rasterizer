@@ -59,7 +59,7 @@ Then, it reminds me of a kind of comic books that's once popular in China during
 
 When I was a child, I have a lot of these comic books that my father read when he was a child. Well, now I know this is called pen drawing, a complicated art. 
 
-Then I tried to mock this art form, and this is my first trial.
+Then I tried to mock this art form, and this is my first trial, a naive sketch. 
 
 ![result](pic/basic_sketch.png)
 
@@ -77,3 +77,31 @@ The law of pen drawing is:
 ![result](pic/pen_draw.png)
 
 I think this could illustrate that well. 
+
+So here's the problem: 
+we need the line density to be non-linear, 
+and even in the darkest areas, we CAN NOT paint them all black. Instead, we need them to be one after another, the darker, the closer. 
+
+Good thing is, we can re-use the toon shader codes, with some modifications. 
+
+In toon shader, color discret is done by: 
+
+int r = (color.x) * layers;
+
+And we add: 
+
+r % = 2;
+
+So half the color segments are turned to be totally white, and half are totally black. 
+
+And it's black after white after black after white... in sequence. 
+
+![result](pic/toon_grads.png)
+
+Then what we need to do is to draw the gradiant outlines. 
+
+I slightly modified the function I used before as naive sketching, now we only detect color increasing, rather than depth changing. 
+
+![result](pic/sketch_2.png)
+
+
