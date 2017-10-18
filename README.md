@@ -5,16 +5,19 @@ CUDA Rasterizer
 
 **University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 4**
 
-* (TODO) YOUR NAME HERE
-* Tested on: (TODO) Windows 22, i7-2222 @ 2.22GHz 22GB, GTX 222 222MB (Moore 2222 Lab)
+* JuYang
+* ### Tested on: Windows 7, i7-4710MQ @ 2.50GHz 8GB, GTX 870M 6870MB (Hasee Notebook K770E-i7)
+![result](pic/sketch_fin.gif)
 
-### (TODO: Your README)
+## HighLight Features
+    ### 1. Toon Shader
+    ![result](pic/toon_actual.gif)
+    ![result](pic/toon_debug.gif)
+    
+    I made a toon shader with outline drawing.
+    
+    ### 2. Sketch Shader
+    
 
-*DO NOT* leave the README to the last minute! It is a crucial part of the
-project, and we will not be able to grade you without a good README.
 
 
-### Credits
-
-* [tinygltfloader](https://github.com/syoyo/tinygltfloader) by [@soyoyo](https://github.com/syoyo)
-* [glTF Sample Models](https://github.com/KhronosGroup/glTF/blob/master/sampleModels/README.md)
